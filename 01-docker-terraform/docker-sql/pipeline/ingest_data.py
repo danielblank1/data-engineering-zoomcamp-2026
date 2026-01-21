@@ -22,36 +22,55 @@ dtype = {
     "tolls_amount": "float64",
     "improvement_surcharge": "float64",
     "total_amount": "float64",
-    "congestion_surcharge": "float64"
+    "congestion_surcharge": "float64",
 }
 
-parse_dates = [
-    "tpep_pickup_datetime",
-    "tpep_dropoff_datetime"
-]
+parse_dates = ["tpep_pickup_datetime", "tpep_dropoff_datetime"]
 
 
 @click.command()
-@click.option('--pg-user', default='root', help='PostgreSQL user')
-@click.option('--pg-pass', default='root', help='PostgreSQL password')
-@click.option('--pg-host', default='localhost', help='PostgreSQL host')
-@click.option('--pg-port', default=5432, type=int, help='PostgreSQL port')
-@click.option('--pg-db', default='ny_taxi', help='PostgreSQL database name')
-@click.option('--year', default=2021, type=int, help='Year of the data')
-@click.option('--month', default=1, type=int, help='Month of the data')
-@click.option('--target-table', default='yellow_taxi_data', help='Target table name')
-@click.option('--chunksize', default=100000, type=int, help='Chunk size for reading CSV')
-def run(pg_user, pg_pass, pg_host, pg_port, pg_db, year, month, target_table, chunksize):
+@click.option("--pg-user", default="root", help="PostgreSQL user")
+@click.option("--pg-pass", default="root", help="PostgreSQL password")
+@click.option("--pg-host", default="localhost", help="PostgreSQL host")
+@click.option("--pg-port", default=5432, type=int, help="PostgreSQL port")
+@click.option("--pg-db", default="ny_taxi", help="PostgreSQL database name")
+@click.option("--year", default=None, type=int, help="Year of the data")
+@click.option("--month", default=None, type=int, help="Month of the data")
+@click.option("--url", default=None, help="Direct URL to CSV file")
+@click.option("--target-table", default="yellow_taxi_data", help="Target table name")
+@click.option(
+    "--chunksize", default=100000, type=int, help="Chunk size for reading CSV"
+)
+def run(
+    pg_user, pg_pass, pg_host, pg_port, pg_db, year, month, url, target_table, chunksize
+):
     """Ingest NYC taxi data into PostgreSQL database."""
-    prefix = 'https://github.com/DataTalksClub/nyc-tlc-data/releases/download/yellow'
-    url = f'{prefix}/yellow_tripdata_{year}-{month:02d}.csv.gz'
 
-    engine = create_engine(f'postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}')
+    # Determine URL
+    if url:
+        # Use provided URL directly (for zones or other files)
+        data_url = url
+        use_dtype = None  # Don't apply taxi dtype to zones
+        use_parse_dates = None
+    elif year and month:
+        # Construct yellow taxi URL
+        prefix = (
+            "https://github.com/DataTalksClub/nyc-tlc-data/releases/download/yellow"
+        )
+        data_url = f"{prefix}/yellow_tripdata_{year}-{month:02d}.csv.gz"
+        use_dtype = dtype
+        use_parse_dates = parse_dates
+    else:
+        raise ValueError("Either provide --url or both --year and --month")
+
+    engine = create_engine(
+        f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}"
+    )
 
     df_iter = pd.read_csv(
-        url,
-        dtype=dtype,
-        parse_dates=parse_dates,
+        data_url,
+        dtype=use_dtype,
+        parse_dates=use_parse_dates,
         iterator=True,
         chunksize=chunksize,
     )
@@ -60,18 +79,15 @@ def run(pg_user, pg_pass, pg_host, pg_port, pg_db, year, month, target_table, ch
 
     for df_chunk in tqdm(df_iter):
         if first:
-            df_chunk.head(0).to_sql(
-                name=target_table,
-                con=engine,
-                if_exists='replace'
-            )
+            df_chunk.head(0).to_sql(name=target_table, con=engine, if_exists="replace")
+            print(f"Table {target_table} created")
             first = False
 
-        df_chunk.to_sql(
-            name=target_table,
-            con=engine,
-            if_exists='append'
-        )
+        df_chunk.to_sql(name=target_table, con=engine, if_exists="append")
+        print(f"Inserted: {len(df_chunk)}")
 
-if __name__ == '__main__':
+    print(f"Finished loading {target_table}!")
+
+
+if __name__ == "__main__":
     run()
