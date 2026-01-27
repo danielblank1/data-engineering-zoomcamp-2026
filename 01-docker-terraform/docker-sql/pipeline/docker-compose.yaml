@@ -9,6 +9,11 @@ services:
       - ny_taxi_postgres_data:/var/lib/postgresql
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U root -d ny_taxi"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   pgadmin:
     image: dpage/pgadmin4
@@ -20,7 +25,25 @@ services:
     ports:
       - "8085:80"
 
+  ingest-green:
+    build: .
+    depends_on:
+      pgdatabase:
+        condition: service_healthy
+    command:
+      - "--pg-host=pgdatabase"
+      - "--url=https://d37ci6vzurychx.cloudfront.net/trip-data/green_tripdata_2025-11.parquet"
+      - "--target-table=green_taxi_trips"
 
+  ingest-zones:
+    build: .
+    depends_on:
+      pgdatabase:
+        condition: service_healthy
+    command:
+      - "--pg-host=pgdatabase"
+      - "--url=https://github.com/DataTalksClub/nyc-tlc-data/releases/download/misc/taxi_zone_lookup.csv"
+      - "--target-table=taxi_zones"
 
 volumes:
   ny_taxi_postgres_data:
