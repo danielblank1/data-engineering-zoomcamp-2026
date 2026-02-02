@@ -1,0 +1,280 @@
+id: local_taxi_scheduled
+namespace: zoomcamp
+description: |
+  Loads NYC taxi trip data into local PostgreSQL.
+  Use Kestra's backfill feature to load data for any date range (e.g., 2021-01-01 to 2021-07-31).
+  Add a label backfill:true from the UI to track backfill executions.
+  CSV data source: https://github.com/DataTalksClub/nyc-tlc-data/releases
+
+inputs:
+  - id: taxi
+    type: SELECT
+    displayName: Select taxi type
+    values: [yellow, green]
+    defaults: green
+
+variables:
+  file: "{{inputs.taxi}}_tripdata_{{trigger.date | date('yyyy-MM')}}.csv"
+  staging_table: "{{inputs.taxi}}_staging_{{trigger.date | date('yyyy_MM')}}"
+  data: "{{outputs.extract.outputFiles[inputs.taxi ~ '_tripdata_' ~ (trigger.date | date('yyyy-MM')) ~ '.csv']}}"
+
+tasks:
+  - id: set_label
+    type: io.kestra.plugin.core.execution.Labels
+    labels:
+      file: "{{render(vars.file)}}"
+      taxi: "{{inputs.taxi}}"
+
+  - id: extract
+    type: io.kestra.plugin.scripts.shell.Commands
+    outputFiles:
+      - "*.csv"
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    commands:
+      - wget -q --tries=3 --timeout=120 -O {{render(vars.file)}}.gz https://github.com/DataTalksClub/nyc-tlc-data/releases/download/{{inputs.taxi}}/{{render(vars.file)}}.gz
+      - gunzip -f {{render(vars.file)}}.gz
+
+  - id: if_green_taxi
+    type: io.kestra.plugin.core.flow.If
+    condition: "{{inputs.taxi == 'green'}}"
+    then:
+      - id: create_green_table
+        type: io.kestra.plugin.jdbc.postgresql.Query
+        sql: |
+          CREATE TABLE IF NOT EXISTS green_tripdata (
+            unique_row_id TEXT PRIMARY KEY,
+            filename TEXT,
+            vendorid TEXT,
+            lpep_pickup_datetime TIMESTAMP,
+            lpep_dropoff_datetime TIMESTAMP,
+            store_and_fwd_flag TEXT,
+            ratecodeid TEXT,
+            pulocationid TEXT,
+            dolocationid TEXT,
+            passenger_count INTEGER,
+            trip_distance NUMERIC,
+            fare_amount NUMERIC,
+            extra NUMERIC,
+            mta_tax NUMERIC,
+            tip_amount NUMERIC,
+            tolls_amount NUMERIC,
+            ehail_fee NUMERIC,
+            improvement_surcharge NUMERIC,
+            total_amount NUMERIC,
+            payment_type INTEGER,
+            trip_type INTEGER,
+            congestion_surcharge NUMERIC
+          );
+
+      - id: create_green_staging
+        type: io.kestra.plugin.jdbc.postgresql.Queries
+        sql: |
+          DROP TABLE IF EXISTS {{render(vars.staging_table)}};
+          CREATE TABLE {{render(vars.staging_table)}} (
+            vendorid TEXT,
+            lpep_pickup_datetime TEXT,
+            lpep_dropoff_datetime TEXT,
+            store_and_fwd_flag TEXT,
+            ratecodeid TEXT,
+            pulocationid TEXT,
+            dolocationid TEXT,
+            passenger_count TEXT,
+            trip_distance TEXT,
+            fare_amount TEXT,
+            extra TEXT,
+            mta_tax TEXT,
+            tip_amount TEXT,
+            tolls_amount TEXT,
+            ehail_fee TEXT,
+            improvement_surcharge TEXT,
+            total_amount TEXT,
+            payment_type TEXT,
+            trip_type TEXT,
+            congestion_surcharge TEXT
+          );
+
+      - id: green_copy_in
+        type: io.kestra.plugin.jdbc.postgresql.CopyIn
+        from: "{{render(vars.data)}}"
+        table: "{{render(vars.staging_table)}}"
+        format: CSV
+        header: true
+        delimiter: ","
+
+      - id: green_merge
+        type: io.kestra.plugin.jdbc.postgresql.Query
+        sql: |
+          INSERT INTO green_tripdata (
+            unique_row_id, filename, vendorid, lpep_pickup_datetime, lpep_dropoff_datetime,
+            store_and_fwd_flag, ratecodeid, pulocationid, dolocationid,
+            passenger_count, trip_distance, fare_amount, extra, mta_tax,
+            tip_amount, tolls_amount, ehail_fee, improvement_surcharge,
+            total_amount, payment_type, trip_type, congestion_surcharge
+          )
+          SELECT
+            MD5(CONCAT(
+              COALESCE(vendorid, ''),
+              COALESCE(lpep_pickup_datetime, ''),
+              COALESCE(lpep_dropoff_datetime, ''),
+              COALESCE(pulocationid, ''),
+              COALESCE(dolocationid, '')
+            )),
+            '{{render(vars.file)}}',
+            vendorid,
+            NULLIF(lpep_pickup_datetime, '')::TIMESTAMP,
+            NULLIF(lpep_dropoff_datetime, '')::TIMESTAMP,
+            store_and_fwd_flag,
+            ratecodeid,
+            pulocationid,
+            dolocationid,
+            NULLIF(passenger_count, '')::INTEGER,
+            NULLIF(trip_distance, '')::NUMERIC,
+            NULLIF(fare_amount, '')::NUMERIC,
+            NULLIF(extra, '')::NUMERIC,
+            NULLIF(mta_tax, '')::NUMERIC,
+            NULLIF(tip_amount, '')::NUMERIC,
+            NULLIF(tolls_amount, '')::NUMERIC,
+            NULLIF(ehail_fee, '')::NUMERIC,
+            NULLIF(improvement_surcharge, '')::NUMERIC,
+            NULLIF(total_amount, '')::NUMERIC,
+            NULLIF(payment_type, '')::INTEGER,
+            NULLIF(trip_type, '')::INTEGER,
+            NULLIF(congestion_surcharge, '')::NUMERIC
+          FROM {{render(vars.staging_table)}}
+          ON CONFLICT (unique_row_id) DO NOTHING;
+
+      - id: drop_green_staging
+        type: io.kestra.plugin.jdbc.postgresql.Query
+        sql: DROP TABLE IF EXISTS {{render(vars.staging_table)}};
+
+  - id: if_yellow_taxi
+    type: io.kestra.plugin.core.flow.If
+    condition: "{{inputs.taxi == 'yellow'}}"
+    then:
+      - id: create_yellow_table
+        type: io.kestra.plugin.jdbc.postgresql.Query
+        sql: |
+          CREATE TABLE IF NOT EXISTS yellow_tripdata (
+            unique_row_id TEXT PRIMARY KEY,
+            filename TEXT,
+            vendorid TEXT,
+            tpep_pickup_datetime TIMESTAMP,
+            tpep_dropoff_datetime TIMESTAMP,
+            passenger_count INTEGER,
+            trip_distance NUMERIC,
+            ratecodeid TEXT,
+            store_and_fwd_flag TEXT,
+            pulocationid TEXT,
+            dolocationid TEXT,
+            payment_type INTEGER,
+            fare_amount NUMERIC,
+            extra NUMERIC,
+            mta_tax NUMERIC,
+            tip_amount NUMERIC,
+            tolls_amount NUMERIC,
+            improvement_surcharge NUMERIC,
+            total_amount NUMERIC,
+            congestion_surcharge NUMERIC
+          );
+
+      - id: create_yellow_staging
+        type: io.kestra.plugin.jdbc.postgresql.Queries
+        sql: |
+          DROP TABLE IF EXISTS {{render(vars.staging_table)}};
+          CREATE TABLE {{render(vars.staging_table)}} (
+            vendorid TEXT,
+            tpep_pickup_datetime TEXT,
+            tpep_dropoff_datetime TEXT,
+            passenger_count TEXT,
+            trip_distance TEXT,
+            ratecodeid TEXT,
+            store_and_fwd_flag TEXT,
+            pulocationid TEXT,
+            dolocationid TEXT,
+            payment_type TEXT,
+            fare_amount TEXT,
+            extra TEXT,
+            mta_tax TEXT,
+            tip_amount TEXT,
+            tolls_amount TEXT,
+            improvement_surcharge TEXT,
+            total_amount TEXT,
+            congestion_surcharge TEXT
+          );
+
+      - id: yellow_copy_in
+        type: io.kestra.plugin.jdbc.postgresql.CopyIn
+        from: "{{render(vars.data)}}"
+        table: "{{render(vars.staging_table)}}"
+        format: CSV
+        header: true
+        delimiter: ","
+
+      - id: yellow_merge
+        type: io.kestra.plugin.jdbc.postgresql.Query
+        sql: |
+          INSERT INTO yellow_tripdata (
+            unique_row_id, filename, vendorid, tpep_pickup_datetime, tpep_dropoff_datetime,
+            passenger_count, trip_distance, ratecodeid, store_and_fwd_flag,
+            pulocationid, dolocationid, payment_type, fare_amount, extra,
+            mta_tax, tip_amount, tolls_amount, improvement_surcharge,
+            total_amount, congestion_surcharge
+          )
+          SELECT
+            MD5(CONCAT(
+              COALESCE(vendorid, ''),
+              COALESCE(tpep_pickup_datetime, ''),
+              COALESCE(tpep_dropoff_datetime, ''),
+              COALESCE(pulocationid, ''),
+              COALESCE(dolocationid, '')
+            )),
+            '{{render(vars.file)}}',
+            vendorid,
+            NULLIF(tpep_pickup_datetime, '')::TIMESTAMP,
+            NULLIF(tpep_dropoff_datetime, '')::TIMESTAMP,
+            NULLIF(passenger_count, '')::INTEGER,
+            NULLIF(trip_distance, '')::NUMERIC,
+            ratecodeid,
+            store_and_fwd_flag,
+            pulocationid,
+            dolocationid,
+            NULLIF(payment_type, '')::INTEGER,
+            NULLIF(fare_amount, '')::NUMERIC,
+            NULLIF(extra, '')::NUMERIC,
+            NULLIF(mta_tax, '')::NUMERIC,
+            NULLIF(tip_amount, '')::NUMERIC,
+            NULLIF(tolls_amount, '')::NUMERIC,
+            NULLIF(improvement_surcharge, '')::NUMERIC,
+            NULLIF(total_amount, '')::NUMERIC,
+            NULLIF(congestion_surcharge, '')::NUMERIC
+          FROM {{render(vars.staging_table)}}
+          ON CONFLICT (unique_row_id) DO NOTHING;
+
+      - id: drop_yellow_staging
+        type: io.kestra.plugin.jdbc.postgresql.Query
+        sql: DROP TABLE IF EXISTS {{render(vars.staging_table)}};
+
+  - id: purge_files
+    type: io.kestra.plugin.core.storage.PurgeCurrentExecutionFiles
+    description: Remove downloaded files to avoid cluttering storage
+
+pluginDefaults:
+  - type: io.kestra.plugin.jdbc.postgresql
+    values:
+      url: jdbc:postgresql://pgdatabase:5432/ny_taxi
+      username: root
+      password: root
+
+triggers:
+  - id: green_schedule
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 9 1 * *"
+    inputs:
+      taxi: green
+
+  - id: yellow_schedule
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 10 1 * *"
+    inputs:
+      taxi: yellow
