@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  warehouse:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./data:/app/data
+      - ./scripts:/app/scripts
+      - ./sql:/app/sql
+    environment:
+      - PYTHONUNBUFFERED=1
+    stdin_open: true
+    tty: true
+    command: bash
